@@ -1,0 +1,391 @@
+---
+title: "Plot_Generation"
+author: "Sarah Romanes"
+date: "4 June 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Load libraries
+
+```{r}
+library(tidyverse) # Plotting and wrangling
+library(multiDA)   # For figure 8 - use inbuilt multiDA plotting
+```
+
+
+# Figure 1
+
+This was made using different combinations of the stat functions in ggplot2.
+
+# Figure 2
+
+Simulation results - feature selection. Results have been faceted by values of K, with increasing n on the x-axis and a separate curve for each p.
+
+```{r Figure 2 Plot Generation}
+
+load("./Code/Results/Fig_2.RData")
+
+n.vals <-seq(50,500, by=50)
+p.vals <- c(500, 1000, 5000, 10000, 20000)
+K.vals <- c(2,3,4,5)
+runs <- 500
+
+
+mRes <- data.frame(mRes)
+mRes$K <- as.integer(mRes$K)
+mRes$p <- as.integer(mRes$p)
+mRes$n <- as.integer(mRes$n)
+mRes$run <- as.integer(mRes$run)
+
+l <-(length(n.vals)*length(p.vals))*length(K.vals) #account for when p.val >=n.val when (p=500, n=500), (p=500, n=1000), (p=1000, n=1000)
+
+mRes2 <- matrix(nrow=l, ncol=4)
+colnames(mRes2) <- c("n", "p", "K","Av.Error")
+
+
+count <- 1
+
+for(i in n.vals){
+  for(j in p.vals){
+    for(k in K.vals){
+      val <- mRes %>% filter(n==i &K==k &p==j) %>% summarise(avg=mean(prop.Error))
+      vals <-unlist(c(i, j, k, val))
+      mRes2[count, ] <- vals
+      count <- count+1
+    }
+  }
+}
+
+mRes2 <- data.frame(mRes2)
+mRes2$K <- as.integer(mRes2$K)
+mRes2$p <- as.integer(mRes2$p)
+mRes2$n <- as.integer(mRes2$n)
+
+mRes3 <- mRes2 %>% filter(K==2|K==3|K==4|K==5)
+
+p2 <- ggplot(data=mRes3, aes(x=n, y=Av.Error, colour = p, group = p)) +
+  geom_line()+
+  geom_point() +
+  scale_y_continuous(name="Average Error Rate") +
+  theme_bw()
+  theme(text = element_text(size=18))
+
+p2 <-p2 + facet_wrap(~ K)
+p2 + theme(axis.title = element_text(size = 16), 
+    axis.text = element_text(size = 13), 
+    axis.text.x = element_text(size = 13), 
+    legend.text = element_text(size = 12), 
+    legend.title = element_text(size = 14), 
+    strip.text = element_text(size = 13))
+```
+
+
+# Figure 3
+
+Simulation results - feature selection comparison against Higher Criticism Threshold for K = 2. Panels have been faceted by p.
+
+```{r Figure 3 Plot Generation}
+load("./Code/Results/Fig_3.RData")
+mRes$n <- as.numeric(mRes$n)
+mRes$K <- as.numeric(mRes$k)
+mRes$prop.Error <- as.numeric(mRes$prop.Error)
+
+n.vals <-seq(50,500, by=50)
+p.vals <- c(500, 1000, 5000, 10000, 20000)
+K.vals <- 2
+method <- c("HC", "multiLDA")
+
+cols <- c("n", "p", "K", "prop.Error", "method")
+l <-2*(length(n.vals)*length(p.vals))*length(K.vals) 
+mRes2 <- matrix(nrow=l, ncol=length(cols))
+colnames(mRes2) <- cols
+
+count <- 1
+
+for(i in n.vals){
+  for(j in p.vals){
+    for(k in K.vals){
+      for(m in method){
+        val <- mRes %>% filter(n==i &K==k &p==j&method==m) %>% summarise(avg=mean(prop.Error))
+        vals <-unlist(c(i, j, k, val,m))
+        mRes2[count, ] <- vals
+        count <- count+1
+      }
+    }
+  }
+}
+
+mRes2 <- as.data.frame(mRes2)
+
+mRes2$n <- as.numeric(levels(mRes2$n))[mRes2$n]
+mRes2$K <- as.numeric(levels(mRes2$K))[mRes2$K]
+mRes2$prop.Error <- as.numeric(levels(mRes2$prop.Error))[mRes2$prop.Error]
+mRes2$p<- as.numeric(levels(mRes2$p))[mRes2$p]
+mRes2$p <- as.factor(mRes2$p)
+
+
+p3 <- ggplot(mRes2, aes(x=n, y=prop.Error, color=method))+geom_line(size=1.01)+facet_wrap(~p) +ylab("Average Error Rate (1-Accuracy)") + theme_bw()+geom_point() +
+   theme(text = element_text(size=20))+scale_color_manual(values = c("lightgreen", "darkslategray4"))
+p3
+```
+
+
+# Figure 4
+
+Simulation results - feature selection, dependent features. Results are faceted by equality of variance assumption.
+
+```{r Figure 4 Plot Generation}
+## Prepare Equal Variances Data ## 
+
+load("./Code/Results/Fig_4_A.RData")
+res.sims <- res.sims.eq
+res.sims <- data.frame(res.sims)
+colnames(res.sims) <- c("FP_lasso", "FN_lasso", "TP_lasso", "TN_lasso", "accuracy_lasso", "p_lasso", "r_lasso", "f1_lasso",
+               "FP_lda", "FN_lda", "TP_lda", "TN_lda", "accuracy_lda", "p_lda", "r_lda", "f1_lda",
+               "FP_qda", "FN_qda", "TP_qda", "TN_qda", "accuracy_qda", "p_qda", "r_qda", "f1_qda",
+               "n")
+
+res.sims$n <- as.factor(res.sims$n)
+
+n.vals <-seq(50,500, by=50)
+cols <- c("n", "FP", "FN", "TP", "TN", "Accuracy", "Precision", "Recall", "F1", "Method", "Var")
+
+s_lasso <- res.sims %>% group_by(n) %>%  summarise(fp.lasso= mean(FP_lasso,na.rm=TRUE), fn.lasso=mean(FN_lasso,na.rm=TRUE), tp.lasso=mean(TP_lasso, na.rm=TRUE), tn.lasso=mean(TN_lasso, na.rm=TRUE), a.lasso=mean(accuracy_lasso,na.rm=TRUE), p.lasso=mean(p_lasso, na.rm=TRUE), r.lasso=mean(r_lasso, na.rm=TRUE), f1.lasso=mean(f1_lasso, na.rm=TRUE))
+s_lasso$Method <- rep("LASSO", length(n.vals))
+s_lasso$Var <- rep("Equal Variances", length(n.vals))
+colnames(s_lasso) <- cols
+
+
+s_lda <- res.sims %>% group_by(n) %>%  summarise(fp.lda= mean(FP_lda), fn.lda=mean(FN_lda), tp.lda=mean(TP_lda), tn.lda=mean(TN_lda), a.lda=mean(accuracy_lda), p.lda=mean(p_lda), r.lda=mean(r_lda), f1.lda=mean(f1_lda))
+s_lda$Method <- rep("multiLDA", length(n.vals))
+s_lda$Var <- rep("Equal Variances", length(n.vals))
+colnames(s_lda) <- cols
+
+s_qda <- res.sims %>% group_by(n) %>%  summarise(fp.qda= mean(FP_qda), fn.qda=mean(FN_qda), tp.qda=mean(TP_qda), tn.qda=mean(TN_qda), a.qda=mean(accuracy_qda), p.qda=mean(p_qda, na.rm=TRUE), r.qda=mean(r_qda), f1.qda=mean(f1_qda, na.rm=TRUE))
+s_qda$Method <- rep("multiQDA", length(n.vals))
+s_qda$Var <- rep("Equal Variances", length(n.vals))
+colnames(s_qda) <- cols
+
+plot_data_eq <- rbind(s_lasso, s_lda, s_qda)
+
+## Prepare Unequal Variances Data ##
+
+load("./Code/Results/Fig_4_B.RData")
+res.sims <- sims.dependent.unequal
+res.sims <- data.frame(res.sims)
+colnames(res.sims) <- c("FP_lasso", "FN_lasso", "TP_lasso", "TN_lasso", "accuracy_lasso", "p_lasso", "r_lasso", "f1_lasso",
+               "FP_lda", "FN_lda", "TP_lda", "TN_lda", "accuracy_lda", "p_lda", "r_lda", "f1_lda",
+               "FP_qda", "FN_qda", "TP_qda", "TN_qda", "accuracy_qda", "p_qda", "r_qda", "f1_qda",
+               "n")
+
+res.sims$n <- as.factor(res.sims$n)
+
+n.vals <-seq(50,500, by=50)
+cols <- c("n", "FP", "FN", "TP", "TN", "Accuracy", "Precision", "Recall", "F1", "Method", "Var")
+
+s_lasso <- res.sims %>% group_by(n) %>%  summarise(fp.lasso= mean(FP_lasso,na.rm=TRUE), fn.lasso=mean(FN_lasso,na.rm=TRUE), tp.lasso=mean(TP_lasso, na.rm=TRUE), tn.lasso=mean(TN_lasso, na.rm=TRUE), a.lasso=mean(accuracy_lasso,na.rm=TRUE), p.lasso=mean(p_lasso, na.rm=TRUE), r.lasso=mean(r_lasso, na.rm=TRUE), f1.lasso=mean(f1_lasso, na.rm=TRUE))
+s_lasso$Method <- rep("LASSO", length(n.vals))
+s_lasso$Var <- rep("Unequal Variances", length(n.vals))
+colnames(s_lasso) <- cols
+
+
+s_lda <- res.sims %>% group_by(n) %>%  summarise(fp.lda= mean(FP_lda, na.rm=TRUE), fn.lda=mean(FN_lda, na.rm=TRUE), tp.lda=mean(TP_lda, na.rm=TRUE), tn.lda=mean(TN_lda, na.rm=TRUE), a.lda=mean(accuracy_lda, na.rm=TRUE), p.lda=mean(p_lda, na.rm=TRUE), r.lda=mean(r_lda, na.rm=TRUE), f1.lda=mean(f1_lda, na.rm=TRUE))
+s_lda$Method <- rep("multiLDA", length(n.vals))
+s_lda$Var <- rep("Unequal Variances", length(n.vals))
+colnames(s_lda) <- cols
+
+s_qda <- res.sims %>% group_by(n) %>%  summarise(fp.qda= mean(FP_qda), fn.qda=mean(FN_qda), tp.qda=mean(TP_qda), tn.qda=mean(TN_qda), a.qda=mean(accuracy_qda), p.qda=mean(p_qda, na.rm=TRUE), r.qda=mean(r_qda), f1.qda=mean(f1_qda, na.rm=TRUE))
+s_qda$Method <- rep("multiQDA", length(n.vals))
+s_qda$Var <- rep("Unequal Variances", length(n.vals))
+colnames(s_qda) <- cols
+
+plot_data_un <- rbind(s_lasso, s_lda, s_qda)
+
+
+## Prepare plot data ##
+
+plot_data <-rbind(plot_data_eq, plot_data_un)
+plot_data$Method <- as.factor(plot_data$Method)
+plot_data$Var <- as.factor(plot_data$Var)
+plot_data$n <-  as.numeric(levels(plot_data$n))[plot_data$n]
+
+plot_data <- plot_data %>% mutate(BAR = (TN+TP)/2)
+
+p4 <- ggplot(plot_data, aes(x=n, y=F1, color=Method))+geom_line(size=1.01)+geom_point()
+p4 <- p4 + theme_bw() +theme(text = element_text(size=20))+scale_colour_manual(values=c("lightgreen", "darkslategray4", "black"))
+p4 <- p4+ facet_wrap(~Var)
+p4
+
+```
+
+# Figure 5
+
+Prediction test errors for simulated data as described in sections 6.2 and 6.3. Independent feature simulations are on the top facets, whilst dependent feature results are on the bottom.
+
+```{r Figure 5 Plot Generation}
+
+load("./Code/Results/Fig_5_A_1.RData")
+load("./Code/Results/Fig_5_A_2.RData")
+load("./Code/Results/Fig_5_B_1.RData")
+load("./Code/Results/Fig_5_B_2.RData")
+load("./Code/Results/Fig_5_C_1.RData")
+load("./Code/Results/Fig_5_C_2.RData")
+load("./Code/Results/Fig_5_D_1.RData")
+load("./Code/Results/Fig_5_D_2.RData")
+
+simulation.1 <- cbind(res.pred.eq, err.pred.nsc.eq)
+simulation.2 <- cbind(res.pred, err.pred.nsc.un)
+simulation.3 <- cbind(res.pred.dep.eq, err.pred.nsc.eq.dep)
+simulation.4 <- cbind(res.pred.dep.un, err.pred.nsc.un.dep)
+
+nams <- c("penLDA", "DLDA", "DQDA", "multiLDA", "multiQDA", "RF", "LASSO", "KNN", "SVM", "NSC" )
+
+
+
+sims.1 <- matrix(nrow=100*length(nams), ncol=3)
+sims.1 <- data.frame(sims.1)
+colnames(sims.1) <- c("Value", "Method", "Type")
+sims.1$Value <- as.vector(simulation.1)
+sims.1$Method <- rep(nams, each=100)
+sims.1$Type <- rep("Simulation 1 - Ind. features, Equal Variances", nrow(sims.1))
+
+
+sims.2 <- matrix(nrow=100*length(nams), ncol=3)
+sims.2 <- data.frame(sims.2)
+colnames(sims.2) <- c("Value", "Method", "Type")
+sims.2$Value <- as.vector(simulation.2)
+sims.2$Method <- rep(nams, each=100)
+sims.2$Type <- rep("Simulation 2 - Ind. features, Unequal Variances", nrow(sims.2))
+
+
+sims.3 <- matrix(nrow=100*length(nams), ncol=3)
+sims.3 <- data.frame(sims.3)
+colnames(sims.3) <- c("Value", "Method", "Type")
+sims.3$Value <- as.vector(simulation.3)
+sims.3$Method <- rep(nams, each=100)
+sims.3$Type <- rep("Simulation 3 - Dep. features, Equal Variances", nrow(sims.3))
+
+
+sims.4 <- matrix(nrow=100*length(nams), ncol=3)
+sims.4 <- data.frame(sims.4)
+colnames(sims.4) <- c("Value", "Method", "Type")
+sims.4$Value <- as.vector(simulation.4)
+sims.4$Method <- rep(nams, each=100)
+sims.4$Type <- rep("Simulation 4 - Dep. features, Unequal Variances", nrow(sims.4))
+
+################################################################################################################
+
+sim.results=rbind(sims.1, sims.2, sims.3, sims.4)
+sim.results$Value <- sim.results$Value/10000
+
+sim.results$Method<- factor(sim.results$Method,
+                            levels = c("multiLDA","multiQDA","DLDA","DQDA","penLDA", "NSC","RF","KNN","SVM","LASSO"),ordered = TRUE)
+
+colnames(sim.results) <- c("Error", "Method", "Type")
+
+p5 <- ggplot(sim.results, aes(x=Method, y=Error, fill=Method)) + geom_boxplot() +
+  theme_bw() +
+  theme(
+    axis.text.x=element_text(size=rel(1), angle=90),
+    axis.text.y=element_text(size=rel(1)),
+    legend.position="none",
+    text = element_text(size=20))+
+  scale_fill_grey(start = 0, end = .99)
+p5 + facet_wrap( ~ Type, ncol=2) + theme(strip.text = element_text(size = 14))
+```
+
+# Figure 6
+
+5 times 5 fold cross validation TCGA Breast Cancer results.
+
+```{r Figure 6 Plot Generation}
+
+load("./Code/Results/Fig_6_A.RData")
+load("./Code/Results/Fig_6_B.RData")
+load("./Code/Results/Fig_6_C.RData")
+load("./Code/Results/Fig_6_D.RData")
+load("./Code/Results/Fig_6_E.RData")
+load("./Code/Results/Fig_6_F.RData")
+load("./Code/Results/Fig_6_G.RData")
+load("./Code/Results/Fig_6_H.RData")
+load("./Code/Results/Fig_6_I.RData")
+load("./Code/Results/Fig_6_J.RData")
+
+labels=c(rep("multiLDA",50), rep("multiQDA",50), rep("DLDA",50), rep("DQDA",50), rep("RF",50), rep("KNN",50), 
+         rep("SVM",50), rep("LASSO",50), rep("penLDA",50), rep("NSC", 50))
+vals=c(res.multiLDA[,6], res.multiQDA[,6], res.sDLDA[,6], res.sDQDA[,6], res.RF[,6], res.KNN.1[,6], res.SVM[,6], res.LC[,6], res.penLDA[,6], res.NSC[,6])
+ours=c(rep(1,100),rep(0,400))
+
+data=data.frame(labels,vals,as.factor(ours))
+data$labels <- factor(data$labels,
+                       levels = c("multiLDA","multiQDA","DLDA","DQDA","penLDA","NSC","RF","KNN","SVM","LASSO"),ordered = TRUE)
+p6 <- ggplot(data, aes(x = labels, y = vals, fill=ours)) +
+              geom_boxplot() +
+              scale_x_discrete(name = "") +
+              scale_y_continuous(name = "CV Error")+
+              scale_fill_gradientn(colours = c("gray78","plum3"))+
+              theme_minimal() +
+              theme(legend.position="none",
+                    text = element_text(size=20)) 
+
+p6
+```
+
+
+# Figure 7
+
+50 times 5 fold cross validation SRBCT results.
+
+```{r Figure 7 Plot Generation}
+
+load("./Code/Results/Fig_7_A.RData")
+load("./Code/Results/Fig_7_B.RData")
+load("./Code/Results/Fig_7_C.RData")
+load("./Code/Results/Fig_7_D.RData")
+load("./Code/Results/Fig_7_E.RData")
+load("./Code/Results/Fig_7_F.RData")
+load("./Code/Results/Fig_7_G.RData")
+load("./Code/Results/Fig_7_H.RData")
+load("./Code/Results/Fig_7_I.RData")
+load("./Code/Results/Fig_7_J.RData")
+
+labels=c(rep("multiLDA",50), rep("multiQDA",50), rep("DLDA",50), rep("DQDA",50), rep("RF",50), rep("KNN",50), 
+         rep("SVM",50), rep("LASSO",50), rep("penLDA",50), rep("NSC", 50))
+vals=c(res.multiLDA[,6], res.multiQDA[,6], res.sDLDA[,6], res.sDQDA[,6], res.RF[,6], res.KNN.1[,6], res.SVM[,6], res.LC[,6], res.penLDA[,6], res.NSC[,6])
+ours=c(rep(1,100),rep(0,400))
+
+data=data.frame(labels,vals,as.factor(ours))
+data$labels <- factor(data$labels,
+                       levels = c("multiLDA","multiQDA","DLDA","DQDA","penLDA","NSC","RF","KNN","SVM","LASSO"),ordered = TRUE)
+p7 <- ggplot(data, aes(x = labels, y = vals, fill=ours)) +
+              geom_boxplot() +
+              scale_x_discrete(name = "") +
+              scale_y_continuous(name = "CV Error")+
+              scale_fill_gradientn(colours = c("gray78","plum3"))+
+              theme_minimal() +
+              theme(legend.position="none",
+                    text = element_text(size=20)) 
+
+p7
+
+```
+
+
+# Figure 8
+
+Kernel density estimates of groupings described by the top ranked gene (CDCA8) by multiLDA for the TCGA Breast Cancer data.
+
+```{r Figure 8 Plot Generation}
+
+load("./Data/TCGA.RData")
+
+mX=TCGA$mX
+vy=TCGA$vy
+
+res = multiDA(X = mX, y = vy, equal.var = TRUE)
+plot(res, ranks = 1)
+
+```
+

@@ -1,0 +1,640 @@
+---
+title: "Independent Features Simulation Studies"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup the simulations
+
+First call relevant libraries.
+
+```{r, eval=TRUE, message=FALSE, warning=FALSE}
+library(multiDA)
+library(partitions)
+library(penalizedLDA)
+library(pamr)
+library(randomForest)
+library(class)
+library(e1071)
+library(sparsediscrim)
+library(glmnet)
+library(ggplot2)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(cvTools)
+library(parallel)
+library(doSNOW)
+```
+
+## Create simulation function for Independent features - Fig_2
+
+We then create a function which can simulate our model, given specific parameters
+
+```{r RUN ME FIRST - sim generation fucntion, eval=TRUE}
+sim.generation <- function(n, p, K, dif.mu,per.noise){
+  
+  # ----- set up response vector vy -------- #
+  v <- seq(1:n)
+  groups <- split(v, ceiling(seq_along(v)/round(n/K)))
+  V <- length(groups)
+  
+  if(V>K){
+    groups[[V-1]] <- c(groups[[V-1]], groups[[V]])
+    groups <- groups[1:K]
+  }
+  vy=rep(0,n)
+  for(k in 1:K){
+    vy[groups[[k]]]=k
+  }
+  vy <- as.factor(vy)
+  
+  #generate random noise#
+  mX <- matrix(rnorm(n*p), nrow=n, ncol=p)
+  
+  # ----- generate data matrix mX based on vy -------- #
+  mS <- as.matrix(setparts(K))
+  
+  #we want per.noise% (as a decimal) signal to be noise (ie partition 1)#
+  per.noise <- per.noise/100
+  ep <- per.noise*p
+  ep <- round(ep)
+  sig <- seq(ep+1,p)
+  
+  #sample randomly from non null partitions#
+  pos <- 2:ncol(mS)
+  inds <- sample(pos,length(sig), replace=T)
+  truth <- c(rep(1,ep),inds)
+  
+  #set up mean for signficicant features#
+  max.mu <-(dif.mu*K)
+  mu <- seq(0, max.mu, by=dif.mu)
+  sigma <- 1
+  
+  #for significant features, generate normals according to partition. assuming DLDA. We keep "1" group as noise and shift others#
+  
+  for(j in sig){
+    part <- mS[,truth[j]]
+    G <- max(part)
+    for(g in 1:G){
+      inds <- which(g==part)
+      inds.y <- which(vy %in% inds)
+      mX[inds.y, j] <- rnorm(n=length(inds.y), mean=mu[g], sd=sigma)
+    }
+  }
+  
+  return(list(mX=mX, vy=vy, truth=truth))
+  
+}
+```
+
+We run the simulation over a grid of n, p, K values, with dif.mu fixed at 1 and per.noise fixed at 90. Only run for p.val > n.val however
+
+```{r Feature Selection - Independent - Fig_2, eval=TRUE}
+
+n.vals <-seq(50,500, by=50)
+p.vals <- c(500, 1000, 5000, 10000, 20000)
+K.vals <- c(2,3,4,5)
+runs <- 500
+
+l <-runs*(length(n.vals)*length(p.vals))*length(K.vals) #account for when p.val >=n.val when (p=500, n=500), (p=500, n=1000), (p=1000, n=1000)
+
+mRes <- matrix(nrow=l, ncol=7)
+colnames(mRes) <- c("run", "n", "p", "K", "ratio", "E", "prop.Error")
+
+
+count <- 1
+
+for(s in 1:runs){
+  
+set.seed(s)
+
+for(i in 1:length(n.vals)){
+  
+  n <- n.vals[i]
+  
+  for(j in 1:length(p.vals)){
+    
+    p <- p.vals[j]
+    
+    if(n<p){
+      
+      for(k in 1:length(K.vals)){
+        
+        K <- K.vals[k]
+        
+        data <- sim.generation(n=n, p=p, K=K, dif.mu=1, per.noise=90)
+        truth <- data$truth
+        
+        res <- multiDA(X=data$mX, y=data$vy, equal.var=TRUE, set.options = "exhaustive", penalty="EBIC")
+        vals <- apply(res$mGamma, 1, which.max)
+        E <- sum(vals!=truth)
+        
+        inds <- which(vals!=truth)
+        
+        
+        vRes <- c(s, n, p, K, p/n, E, E/p)
+        mRes[count, ] <- vRes
+        
+        count <- count+1
+        
+      }
+    }else{
+      next
+    }
+    
+    cat("run=",s, "n=",n,", p=", p, "\n")
+  }
+  
+}
+}
+
+save(mRes, file="Code/Results/Fig_2.RData")
+```
+
+
+### Simulations for prediction - 100 datasets, with 100 training, 10000 testing samples - Figure 5_A and B
+
+```{r Prediction - Unequal Variances - Fig_5_A_1}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+test.function <- function(mX.train, mX.test, vy.train, vy.test, method){
+     
+  n <- nrow(mX)
+  
+  n1=length(which(vy==1))
+  n2=length(which(vy==2))
+  n3=length(which(vy==3))
+  n4=length(which(vy==4))
+  
+  if(method=="penLDA"){
+    
+    vy <- as.factor(vy)
+    
+    cv.out <- PenalizedLDA.cv(mX.train,vy.train,type="standard",lambdas=c(1e-4,1e-3,1e-2,.1,1,10))
+    out <- PenalizedLDA(mX.train,vy.train,type="standard",xte=mX.test, lambda=cv.out$bestlambda,K=cv.out$bestK)
+    vals <- out$ypred[,cv.out$bestK]
+    vals <- as.factor((vals))
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+                 
+    errT <- err1+err2+err3+err4
+  
+    
+  } else if(method=="RandomForest"){
+    
+    vy <- as.factor(vy)
+  
+    p <- ncol(mX.train)
+    model <- randomForest(mX.train, vy.train, ntree=500, mtry=floor(sqrt(p)),nodesize=1)
+    vals <-as.numeric(predict(model, newdata = mX.test))
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+                        
+    
+  } else if(method=="LASSO"){
+    
+    vy <- as.factor(vy)
+   
+    cv <-  cv.glmnet(mX.train,vy.train,family="multinomial")
+    
+    vals <- predict(cv, newx = mX.test, s = "lambda.min", type = "class")
+    vals <- as.factor(vals)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+                       
+    
+  } else if(method=="SVM"){
+    
+    vy <- as.factor(vy)
+    
+   
+    model <- svm(mX.train, vy.train, probability=FALSE)
+    vals <-predict(model,mX.test, decision.values=TRUE, probability=FALSE)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+                       
+  } else if(method=="DLDA"){
+    
+    vy <- as.numeric(vy)
+    
+    p <- ncol(mX.train)
+    model <- dlda(mX.train, vy.train)
+    vals <-as.numeric(predict(model, newdata = mX.test)$class)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+            
+    
+  } else if(method=="DQDA"){
+    
+    vy <- as.numeric(vy)
+   
+    p <- ncol(mX.train)
+    model <- dqda(mX.train, vy.train)
+    vals <-as.numeric(predict(model, newdata = mX.test)$class)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+      
+    
+  } else if(method=="multiLDA"){
+    
+     vy <- as.factor(vy)
+    
+     res <- multiDA(y=vy.train, X=mX.train, penalty="EBIC",  equal.var=TRUE,set.options="exhaustive")
+     vals <- predict(res, newdata = mX.test)$vy.pred
+     
+     err1 <- sum(vals[which(vy.test==1)]!=1)
+     err2 <- sum(vals[which(vy.test==2)]!=2)
+     err3 <- sum(vals[which(vy.test==3)]!=3)
+     err4 <- sum(vals[which(vy.test==4)]!=4)
+     
+     errT <- err1+err2+err3+err4
+                          
+  } else if(method=="multiQDA"){
+    
+    vy <- as.factor(vy)
+    
+  
+    res <- multiDA(y=vy.train, X=mX.train, penalty="EBIC", equal.var=FALSE,set.options="exhaustive")
+    vals<-predict(res, newdata = mX.test)$vy.pred
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+                           
+    
+  } else if(method=="NSC"){
+    
+    vy <- as.factor(vy)
+   
+    p <- ncol(mX.train)
+    mydata <-  list(x=t(mX.train),y=as.factor(vy.train), geneid=1:p)
+    
+    res5 <-  pamr.train(mydata)
+    new.scales <-  pamr.adaptthresh(res5)
+    res5 <-  pamr.train(mydata, threshold.scale=new.scales)
+    vals <- as.numeric(pamr.predict(res5, t(mX.test), threshold=new.scales))
+    
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    
+    errT <- err1+err2+err3+err4
+                         
+                
+  } else if(method=="KNN"){
+    
+    vy <- as.numeric(vy)
+    
+    
+    vals <-  knn(mX.train, mX.test, vy.train, k=1)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+
+    
+  }
+    
+  
+  return(errT)
+  
+}
+
+reps <- 100
+res.pred <-foreach(i=1:reps, 
+                        .combine=rbind,
+                        .packages=c("penalizedLDA", "multiDA", "randomForest", "sparsediscrim", "glmnet", "class", "e1071", "partitions")) %dopar% {
+      set.seed(i)
+      data <- sim.unequal.var(n=10100, p=20000, K=4, dif.mu=0.5,dif.sigma=1,per.noise=90)
+
+      mX <- data$mX
+      vy <- data$vy
+      
+      rm(data)
+      
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      inds <- sample(1:n, 100, replace=FALSE)
+      
+      mX.train <- mX[inds,]
+      vy.train <- vy[inds]
+      
+      mX.test <- mX[-inds,]
+      vy.test <- vy[-inds]
+      
+      res.penLDA <- test.function(mX.train, mX.test, vy.train, vy.test, method="penLDA")
+      res.dlda <- test.function(mX.train, mX.test, vy.train, vy.test, method="DLDA")
+      res.dqda <- test.function(mX.train, mX.test, vy.train, vy.test, method="DQDA")
+      res.multilda <- test.function(mX.train, mX.test, vy.train, vy.test, method="multiLDA")
+      res.multiqda <- test.function(mX.train, mX.test, vy.train, vy.test, method="multiQDA")
+      res.rf <- test.function(mX.train, mX.test, vy.train, vy.test, method="RandomForest")
+      res.lasso <- test.function(mX.train, mX.test, vy.train, vy.test, method="LASSO")
+      res.knn <- test.function(mX.train, mX.test, vy.train, vy.test, method="KNN")
+      res.svm <- test.function(mX.train, mX.test, vy.train, vy.test, method="SVM")
+        
+      err.rep <- c(res.penLDA, res.dlda, res.dqda, res.multilda, res.multiqda, res.rf, res.lasso, res.knn, res.svm)
+      
+      err.rep
+      
+                        }
+
+
+save(res.pred, file="Code/Results/Fig_5_A_1.RData")
+```
+
+```{r Prediction - NSC - Unequal Variances - Fig_5_A_2}
+
+library(pamr)
+library(partitions)
+
+reps <- 100
+
+err.pred.nsc.un <- c()
+
+for(i in 1:reps){
+  set.seed(i)
+      data <- sim.unequal.var(n=10100, p=20000, K=4, dif.mu=0.5,dif.sigma=1,per.noise=90)
+
+      mX <- data$mX
+      vy <- data$vy
+      
+      rm(data)
+      
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      inds <- sample(1:n, 100, replace=FALSE)
+      
+      mX.train <- mX[inds,]
+      vy.train <- vy[inds]
+      
+      mX.test <- mX[-inds,]
+      vy.test <- vy[-inds]
+      
+
+   
+      p <- ncol(mX.train)
+      mydata <-  list(x=t(mX.train),y=as.factor(vy.train), geneid=1:p)
+    
+      res5 <-  pamr.train(mydata)
+      new.scales <-  pamr.adaptthresh(res5)
+      res5 <-  pamr.train(mydata, threshold.scale=new.scales)
+      vals <- as.numeric(pamr.predict(res5, t(mX.test), threshold=new.scales))
+    
+    
+      err1 <- sum(vals[which(vy.test==1)]!=1)
+      err2 <- sum(vals[which(vy.test==2)]!=2)
+      err3 <- sum(vals[which(vy.test==3)]!=3)
+      err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    
+      res.nsc <- err1+err2+err3+err4
+
+      err.pred.nsc.un <- rbind(err.pred.nsc.un, res.nsc)
+      
+      print(i)
+}
+
+save(err.pred.nsc.un, file="Code/Results/Fig_5_A_2.RData")
+
+```
+
+
+```{r Prediction - Equal Variances - Fig_5_B_1}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+reps <- 100
+res.pred.eq <-foreach(i=1:reps, 
+                        .combine=rbind,
+                        .packages=c("penalizedLDA", "multiDA", "randomForest", "sparsediscrim", "glmnet", "class", "e1071", "partitions")) %dopar% {
+      set.seed(i)
+      data <- sim.generation(n=10100, p=20000, K=4, dif.mu=0.5, per.noise=90)
+
+      mX <- data$mX
+      vy <- data$vy
+      
+      #rm(data)
+      
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      inds <- sample(1:n, 100, replace=FALSE)
+      
+      mX.train <- mX[inds,]
+      vy.train <- vy[inds]
+      
+      mX.test <- mX[-inds,]
+      vy.test <- vy[-inds]
+      
+      res.penLDA <- test.function(mX.train, mX.test, vy.train, vy.test, method="penLDA")
+      res.dlda <- test.function(mX.train, mX.test, vy.train, vy.test, method="DLDA")
+      res.dqda <- test.function(mX.train, mX.test, vy.train, vy.test, method="DQDA")
+      res.multilda <- test.function(mX.train, mX.test, vy.train, vy.test, method="multiLDA")
+      res.multiqda <- test.function(mX.train, mX.test, vy.train, vy.test, method="multiQDA")
+      res.rf <- test.function(mX.train, mX.test, vy.train, vy.test, method="RandomForest")
+      res.lasso <- test.function(mX.train, mX.test, vy.train, vy.test, method="LASSO")
+      res.knn <- test.function(mX.train, mX.test, vy.train, vy.test, method="KNN")
+      res.svm <- test.function(mX.train, mX.test, vy.train, vy.test, method="SVM")
+        
+      err.rep <- c(res.penLDA, res.dlda, res.dqda, res.multilda, res.multiqda, res.rf, res.lasso, res.knn, res.svm)
+      
+      err.rep
+      
+                        }
+
+
+save(res.pred.eq, file="Results/Fig_5_B_1.RData")
+
+stopCluster(cl)
+
+```
+
+```{r Prediction - NSC - Equal Variances - Fig_5_B_2}
+
+library(pamr)
+
+reps <- 100
+
+err.pred.nsc.eq <- c()
+
+for(i in 1:reps){
+  set.seed(i)
+      data <- sim.generation(n=10100, p=20000, K=4, dif.mu=0.5, per.noise=90)
+
+      mX <- data$mX
+      vy <- data$vy
+      
+      rm(data)
+      
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      inds <- sample(1:n, 100, replace=FALSE)
+      
+      mX.train <- mX[inds,]
+      vy.train <- vy[inds]
+      
+      mX.test <- mX[-inds,]
+      vy.test <- vy[-inds]
+      
+    
+        p <- ncol(mX.train)
+      mydata <-  list(x=t(mX.train),y=as.factor(vy.train), geneid=1:p)
+    
+      res5 <-  pamr.train(mydata)
+      new.scales <-  pamr.adaptthresh(res5)
+      res5 <-  pamr.train(mydata, threshold.scale=new.scales)
+      vals <- as.numeric(pamr.predict(res5, t(mX.test), threshold=new.scales))
+    
+    
+      err1 <- sum(vals[which(vy.test==1)]!=1)
+      err2 <- sum(vals[which(vy.test==2)]!=2)
+      err3 <- sum(vals[which(vy.test==3)]!=3)
+      err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    
+      res.nsc <- err1+err2+err3+err4
+
+      err.pred.nsc.eq <- rbind(err.pred.nsc.eq, res.nsc)
+      
+      print(i)
+}
+
+save(err.pred.nsc.eq, file="Code/Results/Fig_5_B_2.RData")
+
+```
+
+
+
+# Comparison with HC for K=2 - Fig_3
+
+```{r Comparison of multiDA FS with HC, - Fig_3}
+
+library(fdrtool)
+library(multiDA)
+
+n.vals <-seq(50,500, by=50)
+p.vals <- c(500, 1000, 5000, 10000, 20000)
+K.vals <- 2
+runs=500
+l <-runs*(length(n.vals)*length(p.vals))*length(K.vals)
+mRes <- matrix(nrow=l*2, ncol=9)
+mRes <- data.frame(mRes)
+colnames(mRes) <- c("run", "n", "p", "K", "ratio", "E", "prop.Error", "perc-nonSig", "method")
+
+count <- 1
+
+for(s in 1:runs){
+  
+set.seed(s)
+
+for(i in 1:length(n.vals)){
+  
+  n <- n.vals[i]
+  
+  for(j in 1:length(p.vals)){
+    
+    p <- p.vals[j]
+    
+      for(k in 1:length(K.vals)){
+        
+        K <- K.vals[k]
+        
+        data <- sim.generation(n=n, p=p, K=K, dif.mu=1, per.noise=90)
+        truth <- data$truth
+        
+        res <- multiDA(X=data$mX, y=data$vy, equal.var=TRUE, set.options = "exhaustive", penalty="EBIC")
+        vals <- apply(res$mGamma, 1, which.max)
+        E <- sum(vals!=truth)
+        
+        p.val <- c()
+        y1 = which(data$vy ==1)
+        y2 = which(data$vy ==2)
+        for(i in 1:ncol(data$mX)){
+             p.val[i] <- t.test(data$mX[y1, i], data$mX[y2,i])$p.val
+        }
+        
+        thresh <- hc.thresh(p.val, plot=FALSE)
+        vals.hc <- rep(1,p)
+        vals.hc[which(p.val<thresh) ] <-  2
+        E.hc <- sum(vals.hc!=truth)
+        
+        inds <- which(vals!=truth)
+        pN <- length(which(vals[inds]==1))/E
+        
+        inds.hc <- which(vals.hc!=truth)
+        pN.hc <- length(which(vals[inds.hc]==1))/E.hc
+        
+        vRes <- c(s, n, p, K, p/n, E, E/p, pN, "multiLDA")
+        mRes[count, ] <- vRes
+      
+        vRes.hc <- c(s, n, p, K, p/n, E.hc, E.hc/p, pN.hc, "HC")
+        mRes[count+1, ] <- vRes.hc
+        
+        count <- count+2
+        
+      }
+    
+    cat("run=",s, "n=",n,", p=", p, "\n")
+  }
+  
+}
+}
+
+mRes <- data.frame(mRes)
+
+save(mRes,file="Code/Results/Fig_3.RData")
+
+```
+

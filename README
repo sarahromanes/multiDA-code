@@ -1,0 +1,13 @@
+                                              # READ ME INSTRUCTIONS FOR MULTICLASS DA CODE #
+
+
+1) Open Project "CodePaper.RProj" in RSTUDIO
+2) Open "Code/Simulations". Run both scripts and make sure resulting .RData files needed for plotting are in "Code/Results/"
+3) Repeat (2) but for scripts in "Code/BenchmarkData"
+4) Once all RData files are generated, open "Code/Plot_Generation.Rmd" and run through script to generate plots needed.
+
+
+# NOTES TO BE AWARE OF
+
+a) You will need the multiDA package - which is currently on github. This can be installed using the command `devtools::install_github("sarahromanes/multiDA")`
+b) Some of this code is designed to run in parallel. Make sure you have the doSNOW package installed. The code is designed to take N-1 cores from your computer (where N is number of available cores) but feel free to change if needed.

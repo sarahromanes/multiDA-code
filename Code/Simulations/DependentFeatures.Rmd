@@ -1,0 +1,1073 @@
+---
+title: "Dependent Features Simulation Study"
+author: "Sarah Romanes"
+date: "04 Jun 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r Necessary Packages}
+library(Matrix)
+library(cvTools)
+library(doSNOW)
+library(ggplot2)
+library(glmnet)
+library(randomForest)
+library(rpart)
+library(e1071)
+library(class)
+library(sparsediscrim)
+library(penalizedLDA)
+library(pamr)
+library(multiDA)
+library(magrittr)
+
+
+TRIALS=50
+V=5
+
+```
+
+```{r Key Functions}
+
+genZeroMeanSparceCovNormal = function(n,nBlocks,blockSize,perc,symmetric,permute=TRUE,seed)
+{
+  set.seed(seed) #i added in seed so i can change the seed
+  
+  p = nBlocks*blockSize
+  nnz = round(nBlocks*blockSize*perc)
+  
+  mX = c()
+  lmSigma = list()
+  lmZ = list()
+  
+  for (b in 1:nBlocks)
+  {    
+    randRows = sample(1:blockSize, nnz, replace = TRUE)
+    randCols = sample(1:blockSize, nnz, replace = TRUE)
+    
+    if (symmetric) {
+      vr = c(1:blockSize,randRows,randCols)
+      vc = c(1:blockSize,randCols,randRows)
+    } else {
+      vr = c(1:blockSize,randRows)
+      vc = c(1:blockSize,randCols)
+    }    
+    vals = rnorm(length(vr))
+    
+    mA = sparseMatrix(x=vals, i=vr, j=vc)
+    lmSigma[[b]] = t(mA)%*%mA
+    
+    mZ = t(mA%*%matrix(rnorm(n*blockSize),blockSize,n))
+    mZ = matrix(mZ,n,blockSize)
+    
+    lmZ[[b]] = mZ
+    
+    mX = cbind(mX,mZ)
+    
+    #print(mZ)
+  }
+  
+  if (permute) {
+    ord = sample(p)
+    mX = mX[,ord]    
+  }
+  
+  return(list(mX=mX,lmSigma=lmSigma,lmZ=lmZ,ord=ord))
+} #generates sparse covariance matrices
+
+test.function <- function(mX.train, mX.test, vy.train, vy.test, method){
+     
+  n <- nrow(mX)
+  
+  n1=length(which(vy==1))
+  n2=length(which(vy==2))
+  n3=length(which(vy==3))
+  n4=length(which(vy==4))
+  
+  if(method=="penLDA"){
+    
+    vy <- as.factor(vy)
+    
+    cv.out <- PenalizedLDA.cv(mX.train,vy.train,type="standard",lambdas=c(1e-4,1e-3,1e-2,.1,1,10))
+    out <- PenalizedLDA(mX.train,vy.train,type="standard",xte=mX.test, lambda=cv.out$bestlambda,K=cv.out$bestK)
+    vals <- out$ypred[,cv.out$bestK]
+    vals <- as.factor((vals))
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+                 
+    errT <- err1+err2+err3+err4
+  
+    
+  } else if(method=="RandomForest"){
+    
+    vy <- as.factor(vy)
+  
+    p <- ncol(mX.train)
+    model <- randomForest(mX.train, vy.train, ntree=500, mtry=floor(sqrt(p)),nodesize=1)
+    vals <-as.numeric(predict(model, newdata = mX.test))
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+                        
+    
+  } else if(method=="LASSO"){
+    
+    vy <- as.factor(vy)
+   
+    cv <-  cv.glmnet(mX.train,vy.train,family="multinomial")
+    
+    vals <- predict(cv, newx = mX.test, s = "lambda.min", type = "class")
+    vals <- as.factor(vals)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+                       
+    
+  } else if(method=="SVM"){
+    
+    vy <- as.factor(vy)
+    
+   
+    model <- svm(mX.train, vy.train, probability=FALSE)
+    vals <-predict(model,mX.test, decision.values=TRUE, probability=FALSE)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+                       
+  } else if(method=="DLDA"){
+    
+    vy <- as.numeric(vy)
+    
+    p <- ncol(mX.train)
+    model <- dlda(mX.train, vy.train)
+    vals <-as.numeric(predict(model, newdata = mX.test)$class)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+            
+    
+  } else if(method=="DQDA"){
+    
+    vy <- as.numeric(vy)
+   
+    p <- ncol(mX.train)
+    model <- dqda(mX.train, vy.train)
+    vals <-as.numeric(predict(model, newdata = mX.test)$class)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+      
+    
+  } else if(method=="multiLDA"){
+    
+     vy <- as.factor(vy)
+    
+     res <- multiDA(y=vy.train, X=mX.train, penalty="EBIC",  equal.var=TRUE,set.options="exhaustive")
+     vals <- predict(res, newdata = mX.test)$vy.pred
+     
+     err1 <- sum(vals[which(vy.test==1)]!=1)
+     err2 <- sum(vals[which(vy.test==2)]!=2)
+     err3 <- sum(vals[which(vy.test==3)]!=3)
+     err4 <- sum(vals[which(vy.test==4)]!=4)
+     
+     errT <- err1+err2+err3+err4
+                          
+  } else if(method=="multiQDA"){
+    
+    vy <- as.factor(vy)
+    
+  
+    res <- multiDA(y=vy.train, X=mX.train, penalty="EBIC", equal.var=FALSE,set.options="exhaustive")
+    vals<-predict(res, newdata = mX.test)$vy.pred
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+                           
+    
+  } else if(method=="NSC"){
+    
+    vy <- as.factor(vy)
+   
+    p <- ncol(mX.train)
+    mydata <-  list(x=t(mX.train),y=as.factor(vy.train), geneid=1:p)
+    
+    res5 <-  pamr.train(mydata)
+    new.scales <-  pamr.adaptthresh(res5)
+    res5 <-  pamr.train(mydata, threshold.scale=new.scales)
+    vals <- as.numeric(pamr.predict(res5, t(mX.test), threshold=new.scales))
+    
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    
+    errT <- err1+err2+err3+err4
+                         
+                
+  } else if(method=="KNN"){
+    
+    vy <- as.numeric(vy)
+    
+    
+    vals <-  knn(mX.train, mX.test, vy.train, k=1)
+    
+    err1 <- sum(vals[which(vy.test==1)]!=1)
+    err2 <- sum(vals[which(vy.test==2)]!=2)
+    err3 <- sum(vals[which(vy.test==3)]!=3)
+    err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    errT <- err1+err2+err3+err4
+
+    
+  }
+    
+  
+  return(errT)
+  
+} #function to run all methods (except NSC) for a particular set of test/training data
+```
+
+# Prediction - Dependent featues
+
+## Equal Variances
+
+```{r Equal Variances case - all methods except NSC - Fig_5_C_1}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+reps <- 100
+res.pred.dep.eq <-foreach(i=1:reps, 
+                        .combine=rbind,
+                        .packages=c("penalizedLDA", "multiDA", "randomForest", "sparsediscrim", "glmnet", "class", "e1071", "partitions", "Matrix")) %dopar% {
+      set.seed(i)
+     
+                          
+      n=10100
+      K=4
+      
+      v <- seq(1:n)
+      groups <- split(v, ceiling(seq_along(v)/round(n/K)))
+      V <- length(groups)
+      
+      if(V>K){
+        groups[[V-1]] <- c(groups[[V-1]], groups[[V]])
+        groups <- groups[1:K]
+      }
+      vy=rep(0,n)
+      for(k in 1:K){
+        vy[groups[[k]]]=k
+      }
+      
+      vy <- as.factor(vy)
+      
+      n1=length(which(vy==1))
+      n2=length(which(vy==2))
+      n3=length(which(vy==3))
+      n4=length(which(vy==4))
+      
+      ############################
+      nBlocks = 10
+      blockSize = 2000
+      
+      p <- nBlocks*blockSize
+      
+      perc = 0.25
+      symmetric = TRUE
+      
+      
+      res = genZeroMeanSparceCovNormal(n,nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=i)
+      
+      ###############################################
+      
+      percInformative = 0.1
+      
+      informative1 = sample(p,round(percInformative*p/4))
+      informative2 = sample(p,round(percInformative*p/4))
+      informative3 = sample(p,round(percInformative*p/4))
+      informative4 = sample(p,round(percInformative*p/4))
+      
+      mX=res$mX
+      
+      shift1 = 0.5
+      shift2 = 0.5
+      shift3 = 0.5
+      shift4 = 0.5
+      
+      mX[which(vy==1),informative1] = mX[which(vy==1),informative1] + matrix(shift1,n1,length(informative1))
+      mX[which(vy==2),informative2] = mX[which(vy==2),informative2] + matrix(shift2,n2,length(informative2))
+      mX[which(vy==3),informative3] = mX[which(vy==3),informative3] + matrix(shift3,n3,length(informative3))
+      mX[which(vy==4),informative4] = mX[which(vy==4),informative4] + matrix(shift4,n4,length(informative4))
+
+
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      inds <- sample(1:n, 100, replace=FALSE)
+      
+      mX.train <- mX[inds,]
+      vy.train <- vy[inds]
+      
+      mX.test <- mX[-inds,]
+      vy.test <- vy[-inds]
+      
+      res.penLDA <- test.function(mX.train, mX.test, vy.train, vy.test, method="penLDA")
+      res.dlda <- test.function(mX.train, mX.test, vy.train, vy.test, method="DLDA")
+      res.dqda <- test.function(mX.train, mX.test, vy.train, vy.test, method="DQDA")
+      res.multilda <- test.function(mX.train, mX.test, vy.train, vy.test, method="multiLDA")
+      res.multiqda <- test.function(mX.train, mX.test, vy.train, vy.test, method="multiQDA")
+      res.rf <- test.function(mX.train, mX.test, vy.train, vy.test, method="RandomForest")
+      res.lasso <- test.function(mX.train, mX.test, vy.train, vy.test, method="LASSO")
+      res.knn <- test.function(mX.train, mX.test, vy.train, vy.test, method="KNN")
+      res.svm <- test.function(mX.train, mX.test, vy.train, vy.test, method="SVM")
+        
+      err.rep <- c(res.penLDA, res.dlda, res.dqda, res.multilda, res.multiqda, res.rf, res.lasso, res.knn, res.svm)
+      
+      err.rep
+      
+                        }
+
+
+save(res.pred.dep.eq, file="Code/Results/Fig_5_C_1.RData")
+
+stopCluster(cl)
+
+```
+
+```{r Equal Variances case - NSC method (cannot be run in parallel) - Fig_5_C_2}
+
+library(pamr)
+
+reps <- 100
+
+err.pred.nsc.eq.dep <- c()
+
+for(i in 1:reps){
+  
+      
+       set.seed(i)
+     
+                          
+      n=10100
+      K=4
+      
+      v <- seq(1:n)
+      groups <- split(v, ceiling(seq_along(v)/round(n/K)))
+      V <- length(groups)
+      
+      if(V>K){
+        groups[[V-1]] <- c(groups[[V-1]], groups[[V]])
+        groups <- groups[1:K]
+      }
+      vy=rep(0,n)
+      for(k in 1:K){
+        vy[groups[[k]]]=k
+      }
+      
+      vy <- as.factor(vy)
+      
+      n1=length(which(vy==1))
+      n2=length(which(vy==2))
+      n3=length(which(vy==3))
+      n4=length(which(vy==4))
+      
+      ############################
+      nBlocks = 10
+      blockSize = 2000
+      
+      p <- nBlocks*blockSize
+      
+      perc = 0.25
+      symmetric = TRUE
+      
+      
+      res = genZeroMeanSparceCovNormal(n,nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=i)
+      
+      ###############################################
+      
+      percInformative = 0.1
+      
+      informative1 = sample(p,round(percInformative*p/4))
+      informative2 = sample(p,round(percInformative*p/4))
+      informative3 = sample(p,round(percInformative*p/4))
+      informative4 = sample(p,round(percInformative*p/4))
+      
+      mX=res$mX
+      
+      shift1 = 0.5
+      shift2 = 0.5
+      shift3 = 0.5
+      shift4 = 0.5
+      
+      mX[which(vy==1),informative1] = mX[which(vy==1),informative1] + matrix(shift1,n1,length(informative1))
+      mX[which(vy==2),informative2] = mX[which(vy==2),informative2] + matrix(shift2,n2,length(informative2))
+      mX[which(vy==3),informative3] = mX[which(vy==3),informative3] + matrix(shift3,n3,length(informative3))
+      mX[which(vy==4),informative4] = mX[which(vy==4),informative4] + matrix(shift4,n4,length(informative4))
+
+
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      
+      inds <- sample(1:n, 100, replace=FALSE)
+      
+      mX.train <- mX[inds,]
+      vy.train <- vy[inds]
+      
+      mX.test <- mX[-inds,]
+      vy.test <- vy[-inds]
+      
+    
+        p <- ncol(mX.train)
+      mydata <-  list(x=t(mX.train),y=as.factor(vy.train), geneid=1:p)
+    
+      res5 <-  pamr.train(mydata)
+      new.scales <-  pamr.adaptthresh(res5)
+      res5 <-  pamr.train(mydata, threshold.scale=new.scales)
+      vals <- as.numeric(pamr.predict(res5, t(mX.test), threshold=new.scales))
+    
+    
+      err1 <- sum(vals[which(vy.test==1)]!=1)
+      err2 <- sum(vals[which(vy.test==2)]!=2)
+      err3 <- sum(vals[which(vy.test==3)]!=3)
+      err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    
+      res.nsc <- err1+err2+err3+err4
+
+      err.pred.nsc.eq.dep <- rbind(err.pred.nsc.eq.dep, res.nsc)
+      
+      print(i)
+}
+
+save(err.pred.nsc.eq.dep, file="Code/Results/Fig_5_C_2.RData")
+
+```
+
+
+## Unequal Variances 
+
+```{r Unequal Variances case - all methods except NSC - Fig_5_D_1}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+reps <- 100
+res.pred.dep.un <-foreach(i=1:reps, 
+                        .combine=rbind,
+                        .packages=c("penalizedLDA", "multiDA", "randomForest", "sparsediscrim", "glmnet", "class", "e1071", "partitions", "Matrix")) %dopar% {
+      set.seed(i)
+     
+                          
+      n=10100
+      K=4
+      
+      v <- seq(1:n)
+      groups <- split(v, ceiling(seq_along(v)/round(n/K)))
+      V <- length(groups)
+      
+      if(V>K){
+        groups[[V-1]] <- c(groups[[V-1]], groups[[V]])
+        groups <- groups[1:K]
+      }
+      vy=rep(0,n)
+      for(k in 1:K){
+        vy[groups[[k]]]=k
+      }
+      
+      vy <- as.factor(vy)
+      
+      n1=length(which(vy==1))
+      n2=length(which(vy==2))
+      n3=length(which(vy==3))
+      n4=length(which(vy==4))
+      
+      
+      ##############################################
+      
+      
+      nBlocks = 10
+      blockSize = 2000
+      
+      p <- nBlocks*blockSize
+      
+      perc = 0.25
+      symmetric = TRUE
+      
+      
+      res1 = genZeroMeanSparceCovNormal(sum(vy==1),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=i)
+      res2 = genZeroMeanSparceCovNormal(sum(vy==2),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(2*i))
+      res3 = genZeroMeanSparceCovNormal(sum(vy==3),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(3*i))
+      res4 = genZeroMeanSparceCovNormal(sum(vy==4),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(4*i))
+      s
+      ###############################################
+      
+      mX=matrix(0,n,p)
+      
+      percInformative = 0.1
+      
+      informative1 = sample(p,round(percInformative*p/4))
+      informative2 = sample(p,round(percInformative*p/4))
+      informative3 = sample(p,round(percInformative*p/4))
+      informative4 = sample(p,round(percInformative*p/4))
+      
+      mX[which(vy==1),] = res1$mX
+      mX[which(vy==2),] = res2$mX
+      mX[which(vy==3),] = res3$mX
+      mX[which(vy==4),] = res4$mX
+      
+      shift1 = 0.5
+      shift2 = 0.5
+      shift3 = 0.5
+      shift4 = 0.5
+      
+      mX[which(vy==1),informative1] = mX[which(vy==1),informative1] + matrix(shift1,n1,length(informative1))
+      mX[which(vy==2),informative2] = mX[which(vy==2),informative2] + matrix(shift2,n2,length(informative2))
+      mX[which(vy==3),informative3] = mX[which(vy==3),informative3] + matrix(shift3,n3,length(informative3))
+      mX[which(vy==4),informative4] = mX[which(vy==4),informative4] + matrix(shift4,n4,length(informative4))
+
+
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      inds <- sample(1:n, 100, replace=FALSE)
+      
+      mX.train <- mX[inds,]
+      vy.train <- vy[inds]
+      
+      mX.test <- mX[-inds,]
+      vy.test <- vy[-inds]
+      
+      res.penLDA <- test.function(mX.train, mX.test, vy.train, vy.test, method="penLDA")
+      res.dlda <- test.function(mX.train, mX.test, vy.train, vy.test, method="DLDA")
+      res.dqda <- test.function(mX.train, mX.test, vy.train, vy.test, method="DQDA")
+      res.multilda <- test.function(mX.train, mX.test, vy.train, vy.test, method="multiLDA")
+      res.multiqda <- test.function(mX.train, mX.test, vy.train, vy.test, method="multiQDA")
+      res.rf <- test.function(mX.train, mX.test, vy.train, vy.test, method="RandomForest")
+      res.lasso <- test.function(mX.train, mX.test, vy.train, vy.test, method="LASSO")
+      res.knn <- test.function(mX.train, mX.test, vy.train, vy.test, method="KNN")
+      res.svm <- test.function(mX.train, mX.test, vy.train, vy.test, method="SVM")
+        
+      err.rep <- c(res.penLDA, res.dlda, res.dqda, res.multilda, res.multiqda, res.rf, res.lasso, res.knn, res.svm)
+      
+      err.rep
+      
+                        }
+
+
+save(res.pred.dep.un, file="Code/Results/Fig_5_D_1.RData")
+
+stopCluster(cl)
+```
+
+```{r Unequal Variances case - NSC method (cannot be run in parallel) - Fig_5_D_2}
+
+library(pamr)
+reps <- 100
+
+err.pred.nsc.un.dep <- c()
+
+for(i in 1:reps){
+  
+  
+  set.seed(i)
+     
+                          
+      n=10100
+      K=4
+      
+      v <- seq(1:n)
+      groups <- split(v, ceiling(seq_along(v)/round(n/K)))
+      V <- length(groups)
+      
+      if(V>K){
+        groups[[V-1]] <- c(groups[[V-1]], groups[[V]])
+        groups <- groups[1:K]
+      }
+      vy=rep(0,n)
+      for(k in 1:K){
+        vy[groups[[k]]]=k
+      }
+      
+      vy <- as.factor(vy)
+      
+      n1=length(which(vy==1))
+      n2=length(which(vy==2))
+      n3=length(which(vy==3))
+      n4=length(which(vy==4))
+      
+      
+      ##############################################
+      
+      
+      nBlocks = 10
+      blockSize = 2000
+      
+      p <- nBlocks*blockSize
+      
+      perc = 0.25
+      symmetric = TRUE
+      
+      
+      res1 = genZeroMeanSparceCovNormal(sum(vy==1),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=i)
+      res2 = genZeroMeanSparceCovNormal(sum(vy==2),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(2*i))
+      res3 = genZeroMeanSparceCovNormal(sum(vy==3),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(3*i))
+      res4 = genZeroMeanSparceCovNormal(sum(vy==4),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(4*i))
+      
+      ###############################################
+      
+      mX=matrix(0,n,p)
+      
+      percInformative = 0.1
+      
+      informative1 = sample(p,round(percInformative*p/4))
+      informative2 = sample(p,round(percInformative*p/4))
+      informative3 = sample(p,round(percInformative*p/4))
+      informative4 = sample(p,round(percInformative*p/4))
+      
+      mX[which(vy==1),] = res1$mX
+      mX[which(vy==2),] = res2$mX
+      mX[which(vy==3),] = res3$mX
+      mX[which(vy==4),] = res4$mX
+      
+      shift1 = 0.5
+      shift2 = 0.5
+      shift3 = 0.5
+      shift4 = 0.5
+      
+      mX[which(vy==1),informative1] = mX[which(vy==1),informative1] + matrix(shift1,n1,length(informative1))
+      mX[which(vy==2),informative2] = mX[which(vy==2),informative2] + matrix(shift2,n2,length(informative2))
+      mX[which(vy==3),informative3] = mX[which(vy==3),informative3] + matrix(shift3,n3,length(informative3))
+      mX[which(vy==4),informative4] = mX[which(vy==4),informative4] + matrix(shift4,n4,length(informative4))
+
+
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      
+      inds <- sample(1:n, 100, replace=FALSE)
+      
+      mX.train <- mX[inds,]
+      vy.train <- vy[inds]
+      
+      mX.test <- mX[-inds,]
+      vy.test <- vy[-inds]
+      
+    
+       p <- ncol(mX.train)
+      mydata <-  list(x=t(mX.train),y=as.factor(vy.train), geneid=1:p)
+    
+      res5 <-  pamr.train(mydata)
+      new.scales <-  pamr.adaptthresh(res5)
+      res5 <-  pamr.train(mydata, threshold.scale=new.scales)
+      vals <- as.numeric(pamr.predict(res5, t(mX.test), threshold=new.scales))
+    
+    
+      err1 <- sum(vals[which(vy.test==1)]!=1)
+      err2 <- sum(vals[which(vy.test==2)]!=2)
+      err3 <- sum(vals[which(vy.test==3)]!=3)
+      err4 <- sum(vals[which(vy.test==4)]!=4)
+    
+    
+      res.nsc <- err1+err2+err3+err4
+
+      err.pred.nsc.un.dep <- rbind(err.pred.nsc.un.dep, res.nsc)
+      
+      print(i)
+}
+
+save(err.pred.nsc.un.dep, file="Code/Results/Fig_5_D_2.RData")
+```
+
+
+# Feature selection (and in addition, comparisons with the LASSO) For Figure 4
+
+## Equal covariance structure
+
+```{r Equal Variances case - multiDA vs LASSO FS - Fig_4_A}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+reps <- 500
+n.vals <-seq(50,500, by=50)
+
+res.sims.eq <- c()
+
+for(N in 1:length(n.vals)){
+  
+    n <- n.vals[N]
+
+res.dependency.eq <-foreach(i=1:reps, 
+                        .combine=rbind,
+                        .packages=c("Matrix", "glmnet", "multiDA", "magrittr")) %dopar% {
+                  
+      n=n
+      K=4
+      
+       v <- seq(1:n)
+      groups <- split(v, ceiling(seq_along(v)/round(n/K)))
+      V <- length(groups)
+      
+      if(V>K){
+        groups[[V-1]] <- c(groups[[V-1]], groups[[V]])
+        groups <- groups[1:K]
+      }
+      vy=rep(0,n)
+      for(k in 1:K){
+        vy[groups[[k]]]=k
+      }
+      
+      vy <- as.factor(vy)
+      
+      n1=length(which(vy==1))
+      n2=length(which(vy==2))
+      n3=length(which(vy==3))
+      n4=length(which(vy==4))
+      
+      ############################
+      nBlocks = 10
+      blockSize = 2000
+      
+      p <- nBlocks*blockSize
+      
+      perc = 0.25
+      symmetric = TRUE
+      
+      
+      res = genZeroMeanSparceCovNormal(n,nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(i*n))
+      
+      ###############################################
+      
+      percInformative = 0.1
+      
+      truth <- sample(p, percInformative*p)
+      
+      splits <- split(truth, ceiling(seq_along(truth)/(length(truth)/K)))
+      
+      informative1 <- splits$`1`
+      informative2 <- splits$`2`
+      informative3 <- splits$`3`
+      informative4 <- splits$`4`
+      
+      all_p <- 1:p
+      not.sig <- all_p[-truth]
+      
+      mX=res$mX
+      
+      shift1 = 0.5
+      shift2 = 0.5
+      shift3 = 0.5
+      shift4 = 0.5
+      
+      mX[which(vy==1),informative1] = mX[which(vy==1),informative1] + matrix(shift1,n1,length(informative1))
+      mX[which(vy==2),informative2] = mX[which(vy==2),informative2] + matrix(shift2,n2,length(informative2))
+      mX[which(vy==3),informative3] = mX[which(vy==3),informative3] + matrix(shift3,n3,length(informative3))
+      mX[which(vy==4),informative4] = mX[which(vy==4),informative4] + matrix(shift4,n4,length(informative4))
+
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      cv <-  cv.glmnet(mX,vy,family="multinomial")
+      
+      co <- coef(cv) 
+      inds.lasso <- lapply(co, function(x) which(x!=0)) %>% unlist 
+      names(inds.lasso) <- c()
+      int <- which(inds.lasso==1)
+      inds.lasso <- inds.lasso[-int]
+      inds.lasso <- inds.lasso -1
+      
+           
+      res.LDA <- multiDA(X=mX, y=vy, equal.var=TRUE, penalty="EBIC")
+      r.LDA <- res.LDA$mR
+      inds.multiLDA <- r.LDA$feature.ID[which(r.LDA$partition!=1)]
+      inds.multiLDA <- strsplit(as.character(inds.multiLDA), "V") %>% lapply(function(x) x[2]) %>% unlist() %>% as.numeric()
+      
+      res.QDA <- multiDA(X=mX, y=vy, equal.var=FALSE, penalty="EBIC")
+      r.QDA <- res.QDA$mR
+      inds.multiQDA <- r.QDA$feature.ID[which(r.QDA$partition!=1)]
+      inds.multiQDA <- strsplit(as.character(inds.multiQDA), "V") %>% lapply(function(x) x[2]) %>% unlist() %>% as.numeric()
+      
+      vals.LDA <- intersect(inds.multiLDA, truth)
+      vals.QDA <- intersect(inds.multiQDA, truth)
+      vals.LC <- intersect(inds.lasso, truth)
+      
+       not_lasso <- all_p[-inds.lasso]
+      not_lda <- all_p[-inds.multiLDA]
+      not_qda <- all_p[-inds.multiQDA]
+      
+      FP_lasso <- length(intersect(inds.lasso, not.sig))/length(not.sig)
+      FN_lasso <- length(intersect(not_lasso, truth))/length(truth)
+      TP_lasso <- length(intersect(inds.lasso, truth))/length(truth)
+      TN_lasso <- length(intersect(not_lasso, not.sig))/length(not.sig)
+      
+      accuracy_lasso <- (length(intersect(inds.lasso, truth)) + length(intersect(not_lasso, not.sig)))/p
+      p_lasso <- length(intersect(inds.lasso, truth))/(length(intersect(inds.lasso, truth))+length(intersect(inds.lasso, not.sig)))
+      r_lasso <- TP_lasso
+      f1_lasso <- (2*(p_lasso*r_lasso))/(p_lasso+r_lasso)
+      
+      FP_lda <- length(intersect(inds.multiLDA, not.sig))/length(not.sig)
+      FN_lda <- length(intersect(not_lda, truth))/length(truth)
+      TP_lda <- length(intersect(inds.multiLDA, truth))/length(truth)
+      TN_lda <- length(intersect(not_lda, not.sig))/length(not.sig)
+      
+      accuracy_lda <- (length(intersect(inds.multiLDA, truth)) + length(intersect(not_lda, not.sig)))/p
+      p_lda <- length(intersect(inds.multiLDA, truth))/(length(intersect(inds.multiLDA, truth))+length(intersect(inds.multiLDA, not.sig)))
+      r_lda <- TP_lda
+      f1_lda <- (2*(p_lda*r_lda))/(p_lda+r_lda)
+      
+      FP_qda <- length(intersect(inds.multiQDA, not.sig))/length(not.sig)
+      FN_qda <- length(intersect(not_qda, truth))/length(truth)
+      TP_qda <- length(intersect(inds.multiQDA, truth))/length(truth)
+      TN_qda <- length(intersect(not_qda, not.sig))/length(not.sig)
+      
+      accuracy_qda <-  (length(intersect(inds.multiQDA, truth)) + length(intersect(not_qda, not.sig)))/p
+      p_qda <- length(intersect(inds.multiQDA, truth))/(length(intersect(inds.multiQDA, truth))+length(intersect(inds.multiQDA, not.sig)))
+      r_qda <- TP_qda
+      f1_qda <- (2*(p_qda*r_qda))/(p_qda+r_qda)
+  
+      
+      res <- c(FP_lasso, FN_lasso, TP_lasso, TN_lasso, accuracy_lasso, p_lasso, r_lasso, f1_lasso,
+               FP_lda, FN_lda, TP_lda, TN_lda, accuracy_lda, p_lda, r_lda, f1_lda,
+               FP_qda, FN_qda, TP_qda, TN_qda, accuracy_qda, p_qda, r_qda, f1_qda,
+               n)
+      res
+      
+                        }
+
+    res.sims.eq <- rbind(res.sims.eq, res.dependency.eq)
+}
+   
+stopCluster(cl)
+      
+save(res.sims.eq, file="Code/Results/Fig_4_A.RData")
+
+```
+
+## Unequal covariance structure 
+
+```{r Unequal Variances case - multiDA vs LASSO FS - Fig_4_B}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+
+reps <- 500
+n.vals <-seq(50,500, by=50)
+
+res.sims <- c()
+
+for(N in 1:length(n.vals)){
+  
+    n <- n.vals[N]
+
+res.dependency <-foreach(i=1:reps, 
+                        .combine=rbind,
+                        .packages=c("Matrix", "glmnet", "multiDA", "magrittr")) %dopar% {
+                  
+  
+      K=4
+      
+      v <- seq(1:n)
+      groups <- split(v, ceiling(seq_along(v)/round(n/K)))
+      V <- length(groups)
+      
+      if(V>K){
+        groups[[V-1]] <- c(groups[[V-1]], groups[[V]])
+        groups <- groups[1:K]
+      }
+      vy=rep(0,n)
+      for(k in 1:K){
+        vy[groups[[k]]]=k
+      }
+      
+      vy <- as.factor(vy)
+      
+      n1=length(which(vy==1))
+      n2=length(which(vy==2))
+      n3=length(which(vy==3))
+      n4=length(which(vy==4))
+      
+      
+      ##############################################
+      
+      
+      nBlocks = 10
+      blockSize = 2000
+      
+      p <- nBlocks*blockSize
+      
+      perc = 0.25
+      symmetric = TRUE
+      
+      
+      res1 = genZeroMeanSparceCovNormal(sum(vy==1),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(i*n))
+      res2 = genZeroMeanSparceCovNormal(sum(vy==2),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(2*i*n))
+      res3 = genZeroMeanSparceCovNormal(sum(vy==3),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(3*i*n))
+      res4 = genZeroMeanSparceCovNormal(sum(vy==4),nBlocks,blockSize,perc,symmetric,permute=TRUE,seed=(4*i*n))
+      
+      ###############################################
+      
+      mX=matrix(0,n,p)
+      
+      percInformative = 0.1
+      
+      #informative1 = sample(p,round(percInformative*p/4))
+      #informative2 = sample(p,round(percInformative*p/4))
+      #informative3 = sample(p,round(percInformative*p/4))
+      #informative4 = sample(p,round(percInformative*p/4))
+      
+      #truth <- c(informative1, informative2, informative3, informative4)
+      
+      truth <- sample(p, percInformative*p)
+      
+      splits <- split(truth, ceiling(seq_along(truth)/(length(truth)/K)))
+      
+      informative1 <- splits$`1`
+      informative2 <- splits$`2`
+      informative3 <- splits$`3`
+      informative4 <- splits$`4`
+      
+      all_p <- 1:p
+      not.sig <- all_p[-truth]
+      
+      ## Changed code above so that the splits between the features were UNIQUE.
+      
+      mX[which(vy==1),] = res1$mX
+      mX[which(vy==2),] = res2$mX
+      mX[which(vy==3),] = res3$mX
+      mX[which(vy==4),] = res4$mX
+      
+      shift1 = 0.5
+      shift2 = 0.5
+      shift3 = 0.5
+      shift4 = 0.5
+      
+      mX[which(vy==1),informative1] = mX[which(vy==1),informative1] + matrix(shift1,n1,length(informative1))
+      mX[which(vy==2),informative2] = mX[which(vy==2),informative2] + matrix(shift2,n2,length(informative2))
+      mX[which(vy==3),informative3] = mX[which(vy==3),informative3] + matrix(shift3,n3,length(informative3))
+      mX[which(vy==4),informative4] = mX[which(vy==4),informative4] + matrix(shift4,n4,length(informative4))
+
+
+      n <- nrow(mX)
+      p <- ncol(mX)
+      
+      cv <-  cv.glmnet(mX,vy,family="multinomial")
+      
+      co <- coef(cv) 
+      inds.lasso <- lapply(co, function(x) which(x!=0)) %>% unlist 
+      names(inds.lasso) <- c()
+      int <- which(inds.lasso==1)
+      inds.lasso <- inds.lasso[-int]
+      inds.lasso <- inds.lasso -1
+      
+      res.LDA <- multiDA(X=mX, y=vy, equal.var=TRUE, penalty="EBIC")
+      r.LDA <- res.LDA$mR
+      inds.multiLDA <- r.LDA$feature.ID[which(r.LDA$partition!=1)]
+      inds.multiLDA <- strsplit(as.character(inds.multiLDA), "V") %>% lapply(function(x) x[2]) %>% unlist() %>% as.numeric()
+      
+      res.QDA <- multiDA(X=mX, y=vy, equal.var=FALSE, penalty="EBIC")
+      r.QDA <- res.QDA$mR
+      inds.multiQDA <- r.QDA$feature.ID[which(r.QDA$partition!=1)]
+      inds.multiQDA <- strsplit(as.character(inds.multiQDA), "V") %>% lapply(function(x) x[2]) %>% unlist() %>% as.numeric()
+      
+      
+      vals.LDA <- intersect(inds.multiLDA, truth)
+      vals.QDA <- intersect(inds.multiQDA, truth)
+      vals.LC <- intersect(inds.lasso, truth)
+      
+      not_lasso <- all_p[-inds.lasso]
+      not_lda <- all_p[-inds.multiLDA]
+      not_qda <- all_p[-inds.multiQDA]
+      
+      FP_lasso <- length(intersect(inds.lasso, not.sig))/length(not.sig)
+      FN_lasso <- length(intersect(not_lasso, truth))/length(truth)
+      TP_lasso <- length(intersect(inds.lasso, truth))/length(truth)
+      TN_lasso <- length(intersect(not_lasso, not.sig))/length(not.sig)
+      
+      accuracy_lasso <- (length(intersect(inds.lasso, truth)) + length(intersect(not_lasso, not.sig)))/p
+      p_lasso <- length(intersect(inds.lasso, truth))/(length(intersect(inds.lasso, truth))+length(intersect(inds.lasso, not.sig)))
+      r_lasso <- TP_lasso
+      f1_lasso <- (2*(p_lasso*r_lasso))/(p_lasso+r_lasso)
+      
+      FP_lda <- length(intersect(inds.multiLDA, not.sig))/length(not.sig)
+      FN_lda <- length(intersect(not_lda, truth))/length(truth)
+      TP_lda <- length(intersect(inds.multiLDA, truth))/length(truth)
+      TN_lda <- length(intersect(not_lda, not.sig))/length(not.sig)
+      
+      accuracy_lda <- (length(intersect(inds.multiLDA, truth)) + length(intersect(not_lda, not.sig)))/p
+      p_lda <- length(intersect(inds.multiLDA, truth))/(length(intersect(inds.multiLDA, truth))+length(intersect(inds.multiLDA, not.sig)))
+      r_lda <- TP_lda
+      f1_lda <- (2*(p_lda*r_lda))/(p_lda+r_lda)
+      
+      FP_qda <- length(intersect(inds.multiQDA, not.sig))/length(not.sig)
+      FN_qda <- length(intersect(not_qda, truth))/length(truth)
+      TP_qda <- length(intersect(inds.multiQDA, truth))/length(truth)
+      TN_qda <- length(intersect(not_qda, not.sig))/length(not.sig)
+      
+      accuracy_qda <-  (length(intersect(inds.multiQDA, truth)) + length(intersect(not_qda, not.sig)))/p
+      p_qda <- length(intersect(inds.multiQDA, truth))/(length(intersect(inds.multiQDA, truth))+length(intersect(inds.multiQDA, not.sig)))
+      r_qda <- TP_qda
+      f1_qda <- (2*(p_qda*r_qda))/(p_qda+r_qda)
+  
+      
+      res <- c(FP_lasso, FN_lasso, TP_lasso, TN_lasso, accuracy_lasso, p_lasso, r_lasso, f1_lasso,
+               FP_lda, FN_lda, TP_lda, TN_lda, accuracy_lda, p_lda, r_lda, f1_lda,
+               FP_qda, FN_qda, TP_qda, TN_qda, accuracy_qda, p_qda, r_qda, f1_qda,
+               n)
+      
+      
+      res
+      
+    }
+
+    res.sims <- rbind(res.sims, res.dependency)
+}
+   
+stopCluster(cl)
+
+sims.dependent.unequal <- res.sims
+save(sims.dependent.unequal, file="Code/Results/Fig_4_B.RData")
+
+```
+
+

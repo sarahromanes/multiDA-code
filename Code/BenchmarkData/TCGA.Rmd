@@ -1,0 +1,707 @@
+---
+title: "CV for TCGA-BreastCancer-Code"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global options}
+V=5
+TRIALS=50
+```
+
+```{r packages}
+library(cvTools)
+library(doSNOW)
+library(ggplot2)
+library(glmnet)
+library(randomForest)
+library(rpart)
+library(e1071)
+library(class)
+library(sparsediscrim)
+library(penalizedLDA)
+library(pamr)
+```
+
+```{r data}
+load("Data/TCGA.RData")
+
+mX=TCGA$mX
+vy=TCGA$vy
+
+n=nrow(mX)
+p=ncol(mX)
+
+n1=length(which(vy==1))
+n2=length(which(vy==2))
+n3=length(which(vy==3))
+n4=length(which(vy==4))
+n5=length(which(vy==5))
+
+```
+
+```{r multiLDA, eval=TRUE}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+    
+cvSets=cvFolds(n,V)
+
+errSet=matrix(nrow=V, ncol=6, 0)
+
+res.multiLDA<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("cvTools","multiDA")) %dopar% {
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+  	
+  	  if(TRUE){
+
+  	   res <- multiDA(y=vy.train, X=mX.train, penalty="EBIC", equal.var=TRUE,set.options="exhaustive")
+  	   vals<-predict(res, newdata = mX.test)$vy.pred
+  	    
+  	    err1=sum(vals[which(vy.test==1)]!=1)
+        err2=sum(vals[which(vy.test==2)]!=2)
+        err3=sum(vals[which(vy.test==3)]!=3)
+        err4=sum(vals[which(vy.test==4)]!=4)
+        err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+        errT=err1+err2+err3+err4+err5
+  	  }
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+
+stopCluster(cl)
+
+save(res.multiLDA, file="Code/Results/Fig_6_A.RData")
+
+```
+
+```{r multiQDA, eval=TRUE}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+    
+cvSets=cvFolds(n,V)
+
+errSet=matrix(nrow=V, ncol=6, 0)
+
+res.multiQDA<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("cvTools","multiDA")) %dopar% {
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+  	
+  	  if(TRUE){
+
+  	   res <- multiDA(y=vy.train, X=mX.train,penalty="EBIC", equal.var=FALSE,set.options="exhaustive")
+  	   vals<-predict(res, newdata = mX.test)$vy.pred
+  	    
+  	  err1=sum(vals[which(vy.test==1)]!=1)
+        err2=sum(vals[which(vy.test==2)]!=2)
+        err3=sum(vals[which(vy.test==3)]!=3)
+        err4=sum(vals[which(vy.test==4)]!=4)
+        err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+        errT=err1+err2+err3+err4+err5
+  	  }
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+stopCluster(cl)
+
+save(res.multiQDA, file="Code/Results/Fig_7_B.RData")
+
+```
+
+```{r LASSO multiclass, eval=TRUE}
+
+library(glmnet)
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+    
+cvSets=cvFolds(n,V)
+errSet=matrix(nrow=V, ncol=6, 0)
+
+
+  res.LC<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("glmnet", "cvTools")) %dopar% {
+    
+     set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+    	mX.train=mX[train.inds,]
+    	vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+    
+  	  if(TRUE){
+    	  cv = cv.glmnet(mX.train,vy.train,family="multinomial")
+        vals=predict(cv, newx = mX.test, s = "lambda.min", type = "class")
+        vals=as.factor(vals)
+
+        
+  	    err1=sum(vals[which(vy.test==1)]!=1)
+        err2=sum(vals[which(vy.test==2)]!=2)
+        err3=sum(vals[which(vy.test==3)]!=3)
+        err4=sum(vals[which(vy.test==4)]!=4)
+        err5=sum(vals[which(vy.test==5)]!=5)
+        
+        errT=err1+err2+err3+err4+err5
+  	  }
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  }
+
+
+stopCluster(cl)
+
+save(res.LC, file="Code/Results/Fig_7_C.RData")
+
+```
+
+```{r randomForest, eval=TRUE}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+cvSets=cvFolds(n,V)
+errSet=matrix(nrow=V, ncol=6, 0)
+
+
+  res.RF<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("randomForest", "cvTools")) %dopar% {
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+ 
+  	  if(TRUE){
+  	    p=ncol(mX.train)
+  	    model=randomForest(mX.train, vy.train, ntree=500, mtry=floor(sqrt(p)),nodesize=1)
+  	    vals <-predict(model, newdata = mX.test)
+
+       
+  	    err1=sum(vals[which(vy.test==1)]!=1)
+        err2=sum(vals[which(vy.test==2)]!=2)
+        err3=sum(vals[which(vy.test==3)]!=3)
+        err4=sum(vals[which(vy.test==4)]!=4)
+        err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+        errT=err1+err2+err3+err4+err5
+  	  }
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+
+stopCluster(cl)
+
+save(res.RF, file="Code/Results/Fig_7_D.RData")
+
+
+```
+
+```{r penLDA, eval=TRUE}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+cvSets=cvFolds(n,V)
+
+errSet=matrix(nrow=V, ncol=6, 0)
+
+vy=as.numeric(vy)
+
+
+  res.penLDA<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("penalizedLDA", "cvTools")) %dopar% {
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+  	  
+  
+  	  if(TRUE){
+  	    
+  	    cv.out=PenalizedLDA.cv(mX.train,vy.train,type="standard",lambdas=c(1e-4,1e-3,1e-2,.1,1,10))
+  	    out <- PenalizedLDA(mX.train,vy.train,type="standard",xte=mX.test, lambda=cv.out$bestlambda,K=cv.out$bestK)
+  	    vals=out$ypred[,cv.out$bestK]
+        vals=as.factor((vals))
+        
+  	    err1=sum(vals[which(vy.test==1)]!=1)
+        err2=sum(vals[which(vy.test==2)]!=2)
+        err3=sum(vals[which(vy.test==3)]!=3)
+        err4=sum(vals[which(vy.test==4)]!=4)
+        err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+        errT=err1+err2+err3+err4+err5
+  	  }
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+
+stopCluster(cl)
+
+save(res.penLDA, file="Code/Results/Fig_7_E.RData")
+```
+
+```{r SVM, eval=TRUE}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+cvSets=cvFolds(n,V)
+
+errSet=matrix(nrow=V, ncol=6, 0)
+
+vy=as.factor(vy)
+
+
+  res.SVM<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("e1071", "cvTools")) %dopar% {
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+    	
+  	  if(TRUE){
+  	    
+
+  	    model=svm(mX.train, vy.train, probability=FALSE)
+  	    vals <-predict(model,mX.test, decision.values=TRUE, probability=FALSE)
+  	     err1=sum(vals[which(vy.test==1)]!=1)
+        err2=sum(vals[which(vy.test==2)]!=2)
+        err3=sum(vals[which(vy.test==3)]!=3)
+        err4=sum(vals[which(vy.test==4)]!=4)
+        err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+        errT=err1+err2+err3+err4+err5
+  	  }
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+
+stopCluster(cl)
+
+save(res.SVM, file="Code/Results/Fig_7_F.RData")
+
+```
+
+```{r DQDA, eval=TRUE}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+vy=as.numeric(vy)
+
+cvSets=cvFolds(n,V)
+
+errSet=matrix(nrow=V, ncol=6, 0)
+
+
+  res.sDQDA<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("sparsediscrim", "cvTools")) %dopar% {
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+
+
+  	  if(TRUE){
+  	    p=ncol(mX.train)
+  	    model=dqda(mX.train, vy.train)
+  	    vals <-as.numeric(predict(model, newdata = mX.test)$class)
+  	    
+  	    err1=sum(vals[which(vy.test==1)]!=1)
+        err2=sum(vals[which(vy.test==2)]!=2)
+        err3=sum(vals[which(vy.test==3)]!=3)
+        err4=sum(vals[which(vy.test==4)]!=4)
+        err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+        errT=err1+err2+err3+err4+err5
+  	  }
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+
+stopCluster(cl)
+
+
+save(res.sDQDA, file="Code/Results/Fig_7_G.RData")
+
+```
+
+```{r DLDA, eval=TRUE}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+cvSets=cvFolds(n,V)
+
+errSet=matrix(nrow=V, ncol=6, 0)
+
+
+  res.sDLDA<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("sparsediscrim", "cvTools")) %dopar% {
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+
+
+  	  if(TRUE){
+  	    p=ncol(mX.train)
+  	    model=dlda(mX.train, vy.train)
+  	    vals <-as.numeric(predict(model, newdata = mX.test)$class)
+  	    
+ 
+  	    err1=sum(vals[which(vy.test==1)]!=1)
+        err2=sum(vals[which(vy.test==2)]!=2)
+        err3=sum(vals[which(vy.test==3)]!=3)
+        err4=sum(vals[which(vy.test==4)]!=4)
+        err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+        errT=err1+err2+err3+err4+err5
+  	  }
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+
+stopCluster(cl)
+
+
+
+save(res.sDLDA, file="Code/Results/Fig_7_H.RData")
+
+
+```
+
+```{r NSC ... NOT PARALLEL, eval=TRUE}
+
+cvSets=cvFolds(n,V)
+
+errSet=matrix(nrow=V, ncol=6, 0)
+
+vy=as.factor(vy)
+
+p=ncol(mX)
+
+
+
+res.NSC<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("pamr", "cvTools"),
+               .export = c("mydata"))%do%{
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+  	  p=ncol(mX.train)
+  	  mydata = list(x=t(mX.train),y=as.factor(vy.train), geneid=1:p)
+  	 
+  	  res5 = pamr.train(mydata)
+      new.scales = pamr.adaptthresh(res5)
+      res5 = pamr.train(mydata, threshold.scale=new.scales)
+      vals=as.numeric(pamr.predict(res5, t(mX.test), threshold=new.scales))
+  	    
+  	    
+  	  err1=sum(vals[which(vy.test==1)]!=1)
+      err2=sum(vals[which(vy.test==2)]!=2)
+      err3=sum(vals[which(vy.test==3)]!=3)
+      err4=sum(vals[which(vy.test==4)]!=4)
+      err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+      errT=err1+err2+err3+err4+err5
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+
+
+
+save(res.NSC, file="Code/Results/Fig_7_I.RData")
+
+```
+
+```{r KNN k1, eval=TRUE}
+
+cores <- detectCores()
+cl <- makeCluster(cores -1) #not to overload your computer
+registerDoSNOW(cl)
+
+
+cvSets=cvFolds(n,V)
+
+errSet=matrix(nrow=V, ncol=6, 0)
+
+
+
+  res.KNN.1<-foreach(i=1:TRIALS, 
+               .combine=rbind,
+               .packages=c("class", "cvTools")) %dopar% {
+    
+    
+    set.seed(i)
+    samp=sample(n)
+    
+    
+    for (j in 1:V){
+      
+      inds=which(cvSets$which==j)
+      
+      
+      test.inds <- samp[inds]
+      train.inds <- -samp[inds]
+      
+  	  mX.test=mX[test.inds,]
+  	  mX.train=mX[train.inds,]
+  	  vy.test=vy[test.inds]
+  	  vy.train=vy[train.inds]
+
+  	  
+
+  	    
+  	    vals <-  knn(mX.train, mX.test, vy.train, k=1)
+  
+  	  err1=sum(vals[which(vy.test==1)]!=1)
+      err2=sum(vals[which(vy.test==2)]!=2)
+      err3=sum(vals[which(vy.test==3)]!=3)
+      err4=sum(vals[which(vy.test==4)]!=4)
+      err5=sum(vals[which(vy.test==5)]!=5)
+        
+        
+      errT=err1+err2+err3+err4+err5
+  	
+  	  errSet[j,]=c(err1, err2,err3,err4,err5,errT)
+      
+    }
+  
+  errTrial=apply(errSet,2,sum)
+  errTrial=errTrial/c(n1,n2,n3,n4,n5,n)
+  errTrial
+  
+  }
+
+
+stopCluster(cl)
+
+
+
+save(res.KNN.1, file="Code/Results/Fig_7_J.RData")
+
+```
+
+
