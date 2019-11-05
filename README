@@ -10,4 +10,5 @@
 # NOTES TO BE AWARE OF
 
 a) You will need the multiDA package - which is currently on github. This can be installed using the command `devtools::install_github("sarahromanes/multiDA")`
+a-1) NOTE: sparsediscrim package no longer on CRAN. https://cran.r-project.org/web/packages/sparsediscrim/index.html. Can install from GitHub https://github.com/cran/sparsediscrim
 b) Some of this code is designed to run in parallel. Make sure you have the doSNOW package installed. The code is designed to take N-1 cores from your computer (where N is number of available cores) but feel free to change if needed.
